@@ -130,7 +130,7 @@ static void create_fdt(OpenPitonSpikeState *s, const MemMapEntry *memmap,
     plic_name = g_strdup_printf("/soc/plic@%"PRIx64,
                                 (uint64_t)memmap[OPENPITON_PLIC].base);
     qemu_fdt_add_subnode(fdt, plic_name);
-    qemu_fdt_setprop_string(fdt, plic_name, "compatible", "sifive,plic-1.0.0");
+    qemu_fdt_setprop_string(fdt, plic_name, "compatible", "riscv,plic0");
     qemu_fdt_setprop(fdt, plic_name, "interrupt-controller", NULL, 0);
     qemu_fdt_setprop_cell(fdt, plic_name, "#interrupt-cells", 1);
     qemu_fdt_setprop_cell(fdt, plic_name, "#address-cells", 0);
@@ -147,7 +147,7 @@ static void create_fdt(OpenPitonSpikeState *s, const MemMapEntry *memmap,
     uart_name = g_strdup_printf("/soc/serial@%"PRIx64,
                                 (uint64_t)memmap[OPENPITON_UART0].base);
     qemu_fdt_add_subnode(fdt, uart_name);
-    qemu_fdt_setprop_string(fdt, uart_name, "compatible", "ns16550a");
+    qemu_fdt_setprop_string(fdt, uart_name, "compatible", "ns16550");
     qemu_fdt_setprop_sized_cells(fdt, uart_name, "reg",
         2, memmap[OPENPITON_UART0].base,
         2, memmap[OPENPITON_UART0].size);
@@ -171,7 +171,8 @@ static void openpiton_spike_machine_init(MachineState *machine)
     MemoryRegion *mask_rom = g_new(MemoryRegion, 1);
     const MemMapEntry *memmap = openpiton_memmap;
     RISCVBootInfo boot_info;
-    hwaddr firmware_load_addr = memmap[OPENPITON_DRAM].base;
+    // 0x100000 size is reserved for M-mode stub in openPiton verilator
+    hwaddr firmware_load_addr = memmap[OPENPITON_DRAM].base + 0x100000;
     uint64_t kernel_entry = 0;
     uint64_t fdt_load_addr;
     g_autofree char *plic_hart_config = NULL;

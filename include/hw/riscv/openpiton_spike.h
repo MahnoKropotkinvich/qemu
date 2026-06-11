@@ -30,7 +30,7 @@ enum {
 /* OpenPiton RV64 platform constants */
 #define OPENPITON_TIMEBASE_FREQ       390625
 #define OPENPITON_UART0_IRQ           1
-#define OPENPITON_PLIC_NUM_SOURCES    32
+#define OPENPITON_PLIC_NUM_SOURCES    2
 #define OPENPITON_PLIC_NUM_PRIO       7
 #define OPENPITON_PLIC_PRIO_BASE      0x00
 #define OPENPITON_PLIC_PENDING_BASE   0x1000
