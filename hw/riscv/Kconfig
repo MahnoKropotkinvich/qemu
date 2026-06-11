@@ -110,6 +110,16 @@ config SIFIVE_U
     select SSI_SD
     select UNIMP
 
+
+config OPENPITON_SPIKE
+    bool
+    default y
+    depends on RISCV64
+    select DEVICE_TREE
+    select RISCV_ACLINT
+    select SIFIVE_PLIC
+    select SERIAL_MM
+
 config SPIKE
     bool
     default y
