@@ -36,7 +36,8 @@ static void create_fdt(OpenPitonSpikeState *s, const MemMapEntry *memmap,
     uint64_t mem_base = memmap[OPENPITON_DRAM].base;
     uint64_t mem_size = ms->ram_size;
     void *fdt;
-    uint32_t phandle = 1, intc_phandle, plic_phandle;
+    uint32_t phandle = 1, plic_phandle;
+    g_autofree uint32_t *intc_phandles = NULL;
     g_autofree char *plic_name = NULL;
     g_autofree char *clint_name = NULL;
     g_autofree char *uart_name = NULL;
@@ -46,6 +47,7 @@ static void create_fdt(OpenPitonSpikeState *s, const MemMapEntry *memmap,
     g_autofree char *plic_hart_config = NULL;
 
     int fdt_size;
+    intc_phandles = g_new0(uint32_t, ms->smp.cpus);
     fdt = ms->fdt = create_device_tree(&fdt_size);
     if (!fdt) {
         error_report("create_device_tree() failed");
@@ -71,30 +73,30 @@ static void create_fdt(OpenPitonSpikeState *s, const MemMapEntry *memmap,
     qemu_fdt_setprop_cell(fdt, "/cpus", "#size-cells", 0x0);
     qemu_fdt_setprop_cell(fdt, "/cpus", "#address-cells", 0x1);
 
-    /* single hart */
-    qemu_fdt_add_subnode(fdt, "/cpus/cpu@0");
-    if (is_32_bit) {
-        qemu_fdt_setprop_string(fdt, "/cpus/cpu@0", "mmu-type", "riscv,sv32");
-    } else {
-        qemu_fdt_setprop_string(fdt, "/cpus/cpu@0", "mmu-type", "riscv,sv39");
-    }
-    qemu_fdt_setprop_string(fdt, "/cpus/cpu@0", "riscv,isa",
-                            is_32_bit ? "rv32imafdc" : "rv64imafdc");
-    qemu_fdt_setprop_string(fdt, "/cpus/cpu@0", "compatible", "riscv");
-    qemu_fdt_setprop_string(fdt, "/cpus/cpu@0", "status", "okay");
-    qemu_fdt_setprop_cell(fdt, "/cpus/cpu@0", "reg", 0);
-    qemu_fdt_setprop_string(fdt, "/cpus/cpu@0", "device_type", "cpu");
+    /* openpiton: multi-hart fdt -- one cpu node per hart */
+    for (int cpu = 0; cpu < ms->smp.cpus; cpu++) {
+        g_autofree char *cpu_name = g_strdup_printf("/cpus/cpu@%d", cpu);
+        g_autofree char *intc_name =
+            g_strdup_printf("/cpus/cpu@%d/interrupt-controller", cpu);
 
-    intc_phandle = phandle++;
-    qemu_fdt_add_subnode(fdt, "/cpus/cpu@0/interrupt-controller");
-    qemu_fdt_setprop_cell(fdt, "/cpus/cpu@0/interrupt-controller",
-                          "#interrupt-cells", 1);
-    qemu_fdt_setprop(fdt, "/cpus/cpu@0/interrupt-controller",
-                     "interrupt-controller", NULL, 0);
-    qemu_fdt_setprop_string(fdt, "/cpus/cpu@0/interrupt-controller",
-                            "compatible", "riscv,cpu-intc");
-    qemu_fdt_setprop_cell(fdt, "/cpus/cpu@0/interrupt-controller",
-                          "phandle", intc_phandle);
+        qemu_fdt_add_subnode(fdt, cpu_name);
+        qemu_fdt_setprop_string(fdt, cpu_name, "mmu-type",
+                                is_32_bit ? "riscv,sv32" : "riscv,sv39");
+        qemu_fdt_setprop_string(fdt, cpu_name, "riscv,isa",
+                                is_32_bit ? "rv32imafdc" : "rv64imafdc");
+        qemu_fdt_setprop_string(fdt, cpu_name, "compatible", "riscv");
+        qemu_fdt_setprop_string(fdt, cpu_name, "status", "okay");
+        qemu_fdt_setprop_cell(fdt, cpu_name, "reg", cpu);
+        qemu_fdt_setprop_string(fdt, cpu_name, "device_type", "cpu");
+
+        intc_phandles[cpu] = phandle++;
+        qemu_fdt_add_subnode(fdt, intc_name);
+        qemu_fdt_setprop_cell(fdt, intc_name, "#interrupt-cells", 1);
+        qemu_fdt_setprop(fdt, intc_name, "interrupt-controller", NULL, 0);
+        qemu_fdt_setprop_string(fdt, intc_name, "compatible",
+                                "riscv,cpu-intc");
+        qemu_fdt_setprop_cell(fdt, intc_name, "phandle", intc_phandles[cpu]);
+    }
 
     /* /memory */
     mem_name = g_strdup_printf("/memory@%"PRIx64, mem_base);
@@ -103,11 +105,13 @@ static void create_fdt(OpenPitonSpikeState *s, const MemMapEntry *memmap,
     qemu_fdt_setprop_string(fdt, mem_name, "device_type", "memory");
 
     /* CLINT */
-    clint_cells = g_new0(uint32_t, 4);
-    clint_cells[0] = cpu_to_be32(intc_phandle);
-    clint_cells[1] = cpu_to_be32(IRQ_M_SOFT);
-    clint_cells[2] = cpu_to_be32(intc_phandle);
-    clint_cells[3] = cpu_to_be32(IRQ_M_TIMER);
+    clint_cells = g_new0(uint32_t, ms->smp.cpus * 4);
+    for (int cpu = 0; cpu < ms->smp.cpus; cpu++) {
+        clint_cells[cpu * 4 + 0] = cpu_to_be32(intc_phandles[cpu]);
+        clint_cells[cpu * 4 + 1] = cpu_to_be32(IRQ_M_SOFT);
+        clint_cells[cpu * 4 + 2] = cpu_to_be32(intc_phandles[cpu]);
+        clint_cells[cpu * 4 + 3] = cpu_to_be32(IRQ_M_TIMER);
+    }
 
     clint_name = g_strdup_printf("/soc/clint@%"PRIx64,
                                  (uint64_t)memmap[OPENPITON_CLINT].base);
@@ -117,15 +121,17 @@ static void create_fdt(OpenPitonSpikeState *s, const MemMapEntry *memmap,
         2, memmap[OPENPITON_CLINT].base,
         2, memmap[OPENPITON_CLINT].size);
     qemu_fdt_setprop(fdt, clint_name, "interrupts-extended",
-                     clint_cells, 4 * sizeof(uint32_t));
+                     clint_cells, ms->smp.cpus * 4 * sizeof(uint32_t));
 
     /* PLIC */
     plic_phandle = phandle++;
-    plic_cells = g_new0(uint32_t, 4);
-    plic_cells[0] = cpu_to_be32(intc_phandle);
-    plic_cells[1] = cpu_to_be32(IRQ_M_EXT);
-    plic_cells[2] = cpu_to_be32(intc_phandle);
-    plic_cells[3] = cpu_to_be32(IRQ_S_EXT);
+    plic_cells = g_new0(uint32_t, ms->smp.cpus * 4);
+    for (int cpu = 0; cpu < ms->smp.cpus; cpu++) {
+        plic_cells[cpu * 4 + 0] = cpu_to_be32(intc_phandles[cpu]);
+        plic_cells[cpu * 4 + 1] = cpu_to_be32(IRQ_M_EXT);
+        plic_cells[cpu * 4 + 2] = cpu_to_be32(intc_phandles[cpu]);
+        plic_cells[cpu * 4 + 3] = cpu_to_be32(IRQ_S_EXT);
+    }
 
     plic_name = g_strdup_printf("/soc/plic@%"PRIx64,
                                 (uint64_t)memmap[OPENPITON_PLIC].base);
@@ -135,7 +141,7 @@ static void create_fdt(OpenPitonSpikeState *s, const MemMapEntry *memmap,
     qemu_fdt_setprop_cell(fdt, plic_name, "#interrupt-cells", 1);
     qemu_fdt_setprop_cell(fdt, plic_name, "#address-cells", 0);
     qemu_fdt_setprop(fdt, plic_name, "interrupts-extended",
-                     plic_cells, 4 * sizeof(uint32_t));
+                     plic_cells, ms->smp.cpus * 4 * sizeof(uint32_t));
     qemu_fdt_setprop_sized_cells(fdt, plic_name, "reg",
         2, memmap[OPENPITON_PLIC].base,
         2, memmap[OPENPITON_PLIC].size);
@@ -269,7 +275,7 @@ static void openpiton_spike_machine_class_init(ObjectClass *oc,
 
     mc->desc = "RISC-V OpenPiton-spike board (OpenPiton address map)";
     mc->init = openpiton_spike_machine_init;
-    mc->max_cpus = 1;
+    mc->max_cpus = 16;
     mc->default_cpus = 1;
     mc->default_cpu_type = TYPE_RISCV_CPU_BASE;
     mc->default_ram_id = "openpiton-spike.ram";
